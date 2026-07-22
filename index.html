@@ -1,34 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>AR Dragging - Cubo</title>
+    <title>three.js xr - dragging with custom depth shader</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <link type="text/css" rel="stylesheet" href="main.css">
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            touch-action: none;
-        }
-        #info {
-            position: absolute;
-            top: 10px;
-            width: 100%;
-            text-align: center;
-            color: white;
-            font-family: monospace;
-            z-index: 100;
-            pointer-events: none;
-            text-shadow: 1px 1px 2px black;
-        }
-    </style>
 </head>
 <body>
 
-    <div id="info">Toca el cubo para agarrarlo, toca otra vez para soltarlo</div>
-
-    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+    <div id="info">
+        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> xr - dragging
+    </div>
 
     <script type="importmap">
         {
@@ -42,37 +24,67 @@
     <script type="module">
 
         import * as THREE from 'three';
-        import { ARButton } from 'three/addons/webxr/ARButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { XRButton } from 'three/addons/webxr/XRButton.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
+        let container;
         let camera, scene, renderer;
-        let controller;
-        let cube;
-        let dragged = false;
+        let controller1, controller2;
+        let controllerGrip1, controllerGrip2;
         let isDepthSupplied = false;
 
-        const raycaster = new THREE.Raycaster();
+        let raycaster;
+
+        const intersected = [];
         const tempMatrix = new THREE.Matrix4();
+
+        let controls, group;
 
         init();
         animate();
 
         function init() {
 
-            const container = document.createElement('div');
+            container = document.createElement('div');
             document.body.appendChild(container);
 
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+            scene.background = new THREE.Color(0x808080);
 
-            scene.add(new THREE.HemisphereLight(0xa5a5a5, 0x898989, 3));
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 10);
+            camera.position.set(0, 1.6, 3);
+
+            controls = new OrbitControls(camera, container);
+            controls.target.set(0, 1.6, 0);
+            controls.update();
+
+            const floorGeometry = new THREE.PlaneGeometry(6, 6);
+            const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.25, blending: THREE.CustomBlending, transparent: false });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            scene.add(new THREE.HemisphereLight(0xbcbcbc, 0xa5a5a5, 3));
+
             const light = new THREE.DirectionalLight(0xffffff, 3);
-            light.position.set(1, 1, 1).normalize();
+            light.position.set(0, 6, 0);
+            light.castShadow = true;
+            light.shadow.camera.top = 3;
+            light.shadow.camera.bottom = -3;
+            light.shadow.camera.right = 3;
+            light.shadow.camera.left = -3;
+            light.shadow.mapSize.set(4096, 4096);
             scene.add(light);
 
-            // ========== CUBO CON SHADER DE PROFUNDIDAD ==========
-            const cubeGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            group = new THREE.Group();
+            scene.add(group);
 
-            const cubeMaterial = new THREE.ShaderMaterial({
+            // ========== UN SOLO CUBO CON SHADER DE PROFUNDIDAD ==========
+            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            const material = new THREE.ShaderMaterial({
+
                 vertexShader: /* glsl */`
                     varying vec3 vNormal;
                     varying vec2 vUv;
@@ -195,7 +207,7 @@
                 `,
 
                 uniforms: {
-                    diffuseColor: { value: new THREE.Color(0xff0000) },
+                    diffuseColor: { value: new THREE.Color(Math.random() * 0xffffff) },
                     roughness: { value: 0.7 },
                     metalness: { value: 0.0 },
                     emissive: { value: 0.0 },
@@ -205,107 +217,209 @@
                 }
             });
 
-            cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-            cube.position.set(0, 0, -0.5);
-            cube.castShadow = true;
-            cube.receiveShadow = true;
-            scene.add(cube);
+            const object = new THREE.Mesh(geometry, material);
+            object.position.set(0, 1.0, 0);
+            group.add(object);
 
-            // ========== RENDERER ==========
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            //
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
             renderer.xr.enabled = true;
             container.appendChild(renderer.domElement);
 
-            // ========== BOTÓN AR (SIN depth-sensing para compatibilidad) ==========
-            document.body.appendChild(ARButton.createButton(renderer));
+            document.body.appendChild(XRButton.createButton(renderer, {
+                'optionalFeatures': ['depth-sensing'],
+                'depthSensing': { 'usagePreference': ['gpu-optimized'], 'dataFormatPreference': [] }
+            }));
 
-            // ========== CONTROLADOR ==========
-            controller = renderer.xr.getController(0);
-            controller.addEventListener('selectstart', onSelectStart);
-            controller.addEventListener('selectend', onSelectEnd);
-            scene.add(controller);
+            // controllers
 
-            // Línea visual del rayo
-            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(0, 0, 0),
-                new THREE.Vector3(0, 0, -1)
-            ]);
+            controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            scene.add(controller1);
+
+            controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            scene.add(controller2);
+
+            const controllerModelFactory = new XRControllerModelFactory();
+
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+            scene.add(controllerGrip1);
+
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+            scene.add(controllerGrip2);
+
+            //
+
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
+
             const line = new THREE.Line(lineGeometry);
             line.name = 'line';
             line.scale.z = 5;
-            controller.add(line);
+
+            controller1.add(line.clone());
+            controller2.add(line.clone());
+
+            raycaster = new THREE.Raycaster();
+
+            //
 
             window.addEventListener('resize', onWindowResize);
+
         }
 
         function onWindowResize() {
+
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
+
             renderer.setSize(window.innerWidth, window.innerHeight);
+
         }
 
-        // ========== DETECTAR INTERSECCIÓN ==========
-        function getIntersections() {
+        function onSelectStart(event) {
+
+            const controller = event.target;
+
+            const intersections = getIntersections(controller);
+
+            if (intersections.length > 0) {
+
+                const intersection = intersections[0];
+
+                const object = intersection.object;
+                object.material.uniforms.emissive.value = 1;
+                controller.attach(object);
+
+                controller.userData.selected = object;
+
+            }
+
+            controller.userData.targetRayMode = event.data.targetRayMode;
+
+        }
+
+        function onSelectEnd(event) {
+
+            const controller = event.target;
+
+            if (controller.userData.selected !== undefined) {
+
+                const object = controller.userData.selected;
+                object.material.uniforms.emissive.value = 0;
+                group.attach(object);
+
+                controller.userData.selected = undefined;
+
+            }
+
+        }
+
+        function getIntersections(controller) {
+
             controller.updateMatrixWorld();
+
             tempMatrix.identity().extractRotation(controller.matrixWorld);
 
             raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
             raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
 
-            return raycaster.intersectObject(cube);
+            return raycaster.intersectObjects(group.children, false);
+
         }
 
-        // ========== AGARRAR ==========
-        function onSelectStart() {
-            const intersections = getIntersections();
+        function intersectObjects(controller) {
+
+            // Do not highlight in mobile-ar
+
+            if (controller.userData.targetRayMode === 'screen') return;
+
+            // Do not highlight when already selected
+
+            if (controller.userData.selected !== undefined) return;
+
+            const line = controller.getObjectByName('line');
+            const intersections = getIntersections(controller);
 
             if (intersections.length > 0) {
-                controller.attach(cube);
-                dragged = true;
-                document.getElementById('info').textContent = 'Suelta para dejar el cubo';
+
+                const intersection = intersections[0];
+
+                const object = intersection.object;
+                object.material.uniforms.emissive.value = 1;
+                intersected.push(object);
+
+                line.scale.z = intersection.distance;
+
+            } else {
+
+                line.scale.z = 5;
+
             }
+
         }
 
-        // ========== SOLTAR ==========
-        function onSelectEnd() {
-            if (dragged) {
-                scene.attach(cube);
-                cube.rotation.set(0, 0, 0);
-                dragged = false;
-                document.getElementById('info').textContent = 'Toca el cubo para agarrarlo';
+        function cleanIntersected() {
+
+            while (intersected.length) {
+
+                const object = intersected.pop();
+                object.material.uniforms.emissive.value = 0;
+
             }
+
         }
 
-        // ========== LOOP ==========
+        //
+
         function animate() {
-            renderer.setAnimationLoop(function () {
 
-                // Activar depth sensing si está disponible (opcional)
-                if (renderer.xr.hasDepthSensing && renderer.xr.hasDepthSensing() && !isDepthSupplied) {
-                    cube.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
-                    cube.material.uniforms.depthWidth.value = 1680;
-                    cube.material.uniforms.depthHeight.value = 1760;
+            renderer.setAnimationLoop(render);
+
+        }
+
+        function render() {
+
+            if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
+
+                group.children.forEach(child => {
+
+                    child.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
+                    child.material.uniforms.depthWidth.value = 1680;
+                    child.material.uniforms.depthHeight.value = 1760;
+
                     isDepthSupplied = true;
-                } else if (renderer.xr.hasDepthSensing && !renderer.xr.hasDepthSensing() && isDepthSupplied) {
-                    cube.material.uniforms.depthWidth.value = 0;
-                    cube.material.uniforms.depthHeight.value = 0;
+
+                });
+
+            } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
+
+                group.children.forEach(child => {
+
+                    child.material.uniforms.depthWidth.value = 0;
+                    child.material.uniforms.depthHeight.value = 0;
+
                     isDepthSupplied = false;
-                }
 
-                // Actualizar línea visual
-                const line = controller.getObjectByName('line');
-                const intersections = getIntersections();
+                });
 
-                if (intersections.length > 0) {
-                    line.scale.z = intersections[0].distance;
-                } else {
-                    line.scale.z = 5;
-                }
+            }
 
-                renderer.render(scene, camera);
-            });
+            cleanIntersected();
+
+            intersectObjects(controller1);
+            intersectObjects(controller2);
+
+            renderer.render(scene, camera);
+
         }
 
     </script>
