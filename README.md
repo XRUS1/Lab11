@@ -1,1 +1,1 @@
-# Lab11: XR - Dragging - custom - depth. Una geometría
+# Lab11: XR - Dragging - Custom - Depth. Una geometría
