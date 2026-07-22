@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>AR Dragging - Cubo con Depth Shader</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link type="text/css" rel="stylesheet" href="main.css">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            touch-action: none;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: monospace;
+            z-index: 100;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">Toca el cubo para agarrarlo, toca otra vez para soltarlo</div>
+
+    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./build/three.module.js",
+                "three/addons/": "./jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+        let camera, scene, renderer;
+        let controller;
+        let cube;
+        let dragged = false;
+        let isDepthSupplied = false;
+
+        const raycaster = new THREE.Raycaster();
+        const tempMatrix = new THREE.Matrix4();
+
+        init();
+        animate();
+
+        function init() {
+
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            scene.add(new THREE.HemisphereLight(0xa5a5a5, 0x898989, 3));
+            const light = new THREE.DirectionalLight(0xffffff, 3);
+            light.position.set(1, 1, 1).normalize();
+            scene.add(light);
+
+            // ========== CUBO CON SHADER DE PROFUNDIDAD ==========
+            const cubeGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+
+            const cubeMaterial = new THREE.ShaderMaterial({
+                vertexShader: /* glsl */`
+                    varying vec3 vNormal;
+                    varying vec2 vUv;
+                    void main() {
+                        vNormal = normalize(normalMatrix * normal);
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+
+                fragmentShader: /* glsl */`
+                    uniform vec3 diffuseColor;
+                    uniform float roughness;
+                    uniform float metalness;
+                    uniform float emissive;
+                    varying vec3 vNormal;
+                    varying vec2 vUv;
+                    uniform sampler2DArray depthColor;
+                    uniform float depthWidth;
+                    uniform float depthHeight;
+                    #define saturate(a) clamp(a, 0.0, 1.0)
+                    float Depth_GetCameraDepthInMeters(const sampler2DArray depthTexture,
+                        const vec2 depthUv, int arrayIndex) {
+                        return texture(depthColor, vec3(depthUv.x, depthUv.y, arrayIndex)).r;
+                    }
+                    float Depth_GetOcclusion(const sampler2DArray depthTexture, const vec2 depthUv, float assetDepthM, int arrayIndex) {
+                        float depthMm = Depth_GetCameraDepthInMeters(depthTexture, depthUv, arrayIndex);
+                        const float kDepthTolerancePerM = 0.001;
+                        return clamp(1.0 -
+                            0.5 * (depthMm - assetDepthM) /
+                                (kDepthTolerancePerM * assetDepthM) +
+                            0.5, 0.0, 1.0);
+                    }
+                    float Depth_GetBlurredOcclusionAroundUV(const sampler2DArray depthTexture, const vec2 uv, float assetDepthM, int arrayIndex) {
+                        const float kKernelTotalWeights = 269.0;
+                        float sum = 0.0;
+                        const float kOcclusionBlurAmount = 0.0005;
+                        vec2 blurriness =
+                        vec2(kOcclusionBlurAmount, kOcclusionBlurAmount);
+                        float current = 0.0;
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                        sum += current * 4.0;
+                        current = 0.0;
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-2.0, -0.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+2.0, +0.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+0.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-0.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                        sum += current * 7.0;
+                        current = 0.0;
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                        sum += current * 16.0;
+                        current = 0.0;
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+0.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-0.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(-1.0, -0.0) * blurriness, assetDepthM, arrayIndex);
+                        current += Depth_GetOcclusion(
+                        depthTexture, uv + vec2(+1.0, +0.0) * blurriness, assetDepthM, arrayIndex);
+                        sum += current * 26.0;
+                        sum += Depth_GetOcclusion(depthTexture, uv, assetDepthM, arrayIndex) * 41.0;
+                        return sum / kKernelTotalWeights;
+                    }
+                    void main() {
+                        vec3 normal = normalize(vNormal);
+                        vec3 diffuse = diffuseColor;
+                        float specularIntensity = pow(max(dot(normal, normalize(vec3(0, 0, 1))), 0.0), 64.0);
+                        vec3 specular = vec3(specularIntensity) * mix(vec3(0.04), diffuse, metalness);
+                        gl_FragColor = vec4(diffuse * (1.0 - specular) + specular, 1.0) * (1.0 + emissive);
+
+                        if (depthWidth > 0.0) {
+                            int arrayIndex = 0;
+                            vec2 depthUv;
+                            if (gl_FragCoord.x>=depthWidth) {
+                                arrayIndex = 1;
+                                depthUv = vec2((gl_FragCoord.x-depthWidth)/depthWidth, gl_FragCoord.y/depthHeight);
+                            } else {
+                                depthUv = vec2(gl_FragCoord.x/depthWidth, gl_FragCoord.y/depthHeight);
+                            }
+                            float assetDepthM = gl_FragCoord.z;
+
+                            float occlusion = Depth_GetBlurredOcclusionAroundUV(depthColor, depthUv, assetDepthM, arrayIndex);
+                            float depthMm = Depth_GetCameraDepthInMeters(depthColor, depthUv, arrayIndex);
+
+                            float absDistance = abs(assetDepthM - depthMm);
+                            float v = 0.0025;
+                            absDistance = saturate(v - absDistance) / v;
+
+                            gl_FragColor.rgb += vec3(absDistance * 2.0, absDistance * 2.0, absDistance * 12.0);
+                            gl_FragColor = mix(gl_FragColor, vec4(0.0, 0.0, 0.0, 0.0), occlusion * 0.7);
+                        }
+                    }
+                `,
+
+                uniforms: {
+                    diffuseColor: { value: new THREE.Color(0xff0000) },
+                    roughness: { value: 0.7 },
+                    metalness: { value: 0.0 },
+                    emissive: { value: 0.0 },
+                    depthWidth: { value: 0.0 },
+                    depthHeight: { value: 0.0 },
+                    depthColor: { value: new THREE.Texture() }
+                }
+            });
+
+            cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+            cube.position.set(0, 0, -0.5);
+            cube.castShadow = true;
+            cube.receiveShadow = true;
+            scene.add(cube);
+
+            // ========== RENDERER ==========
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // ========== BOTÓN AR CON DEPTH SENSING ==========
+            document.body.appendChild(XRButton.createButton(renderer, {
+                'optionalFeatures': ['depth-sensing'],
+                'depthSensing': {
+                    'usagePreference': ['gpu-optimized'],
+                    'dataFormatPreference': []
+                }
+            }));
+
+            // ========== CONTROLADOR ==========
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('selectstart', onSelectStart);
+            controller.addEventListener('selectend', onSelectEnd);
+            scene.add(controller);
+
+            // Línea visual del rayo
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -1)
+            ]);
+            const line = new THREE.Line(lineGeometry);
+            line.name = 'line';
+            line.scale.z = 5;
+            controller.add(line);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ========== DETECTAR INTERSECCIÓN ==========
+        function getIntersections() {
+            controller.updateMatrixWorld();
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+            return raycaster.intersectObject(cube);
+        }
+
+        // ========== AGARRAR ==========
+        function onSelectStart() {
+            const intersections = getIntersections();
+
+            if (intersections.length > 0) {
+                controller.attach(cube);
+                dragged = true;
+                document.getElementById('info').textContent = 'Suelta para dejar el cubo';
+            }
+        }
+
+        // ========== SOLTAR ==========
+        function onSelectEnd() {
+            if (dragged) {
+                scene.attach(cube);
+                cube.rotation.set(0, 0, 0);
+                dragged = false;
+                document.getElementById('info').textContent = 'Toca el cubo para agarrarlo';
+            }
+        }
+
+        // ========== LOOP ==========
+        function animate() {
+            renderer.setAnimationLoop(function () {
+
+                // Activar depth sensing si está disponible
+                if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
+                    cube.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
+                    cube.material.uniforms.depthWidth.value = 1680;
+                    cube.material.uniforms.depthHeight.value = 1760;
+                    isDepthSupplied = true;
+                } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
+                    cube.material.uniforms.depthWidth.value = 0;
+                    cube.material.uniforms.depthHeight.value = 0;
+                    isDepthSupplied = false;
+                }
+
+                // Actualizar línea visual
+                const line = controller.getObjectByName('line');
+                const intersections = getIntersections();
+
+                if (intersections.length > 0) {
+                    line.scale.z = intersections[0].distance;
+                } else {
+                    line.scale.z = 5;
+                }
+
+                renderer.render(scene, camera);
+            });
+        }
+
+    </script>
+</body>
+</html>
