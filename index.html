@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>AR Dragging - Cubo con Depth Shader</title>
+    <title>AR Dragging - Cubo</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <link type="text/css" rel="stylesheet" href="main.css">
@@ -218,14 +218,8 @@
             renderer.xr.enabled = true;
             container.appendChild(renderer.domElement);
 
-            // ========== BOTÓN AR CON DEPTH SENSING ==========
-            document.body.appendChild(XRButton.createButton(renderer, {
-                'optionalFeatures': ['depth-sensing'],
-                'depthSensing': {
-                    'usagePreference': ['gpu-optimized'],
-                    'dataFormatPreference': []
-                }
-            }));
+            // ========== BOTÓN AR (SIN depth-sensing para compatibilidad) ==========
+            document.body.appendChild(ARButton.createButton(renderer));
 
             // ========== CONTROLADOR ==========
             controller = renderer.xr.getController(0);
@@ -288,13 +282,13 @@
         function animate() {
             renderer.setAnimationLoop(function () {
 
-                // Activar depth sensing si está disponible
-                if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
+                // Activar depth sensing si está disponible (opcional)
+                if (renderer.xr.hasDepthSensing && renderer.xr.hasDepthSensing() && !isDepthSupplied) {
                     cube.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
                     cube.material.uniforms.depthWidth.value = 1680;
                     cube.material.uniforms.depthHeight.value = 1760;
                     isDepthSupplied = true;
-                } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
+                } else if (renderer.xr.hasDepthSensing && !renderer.xr.hasDepthSensing() && isDepthSupplied) {
                     cube.material.uniforms.depthWidth.value = 0;
                     cube.material.uniforms.depthHeight.value = 0;
                     isDepthSupplied = false;
