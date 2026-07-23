@@ -193,10 +193,11 @@
                 depthHeight: { value: 1 }
             };
 
-            const object = new THREE.Mesh(geometry, material);
-            object.position.set(0, 1.0, 0);
-            group.add(object);
-
+            // Por esto (reemplaza el 0 final por -1.5 o -2.0):
+	    const object = new THREE.Mesh(geometry, material);
+	    object.position.set(0, 1.0, -1.5); // Ahora aparecerá a 1.5 metros enfrente de ti
+	    group.add(object);
+	    
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -284,13 +285,16 @@
             const object = controller.userData.selected;
             object.material.uniforms.emissive.value = 0.0;
             group.attach(object);
+            
+            // --- LÍNEA AÑADIDA: Asegura que el cubo se alinee perfectamente al soltarlo ---
+            object.rotation.set(0, 0, 0); 
 
             controller.userData.selected = undefined;
 
         }
 
     }
-
+    
     function getIntersections(controller) {
 
         controller.updateMatrixWorld();
@@ -352,6 +356,9 @@
 
     function render() {
 
+        // --- LINEA AÑADIDA: Bloquea la rotación del grupo para que la base mire siempre abajo ---
+        group.rotation.set(0, 0, 0); 
+
         if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
 
             group.children.forEach(child => {
@@ -389,12 +396,14 @@
         intersectObjects(controller1);
         intersectObjects(controller2);
 
-   
         controls.update();
         renderer.render(scene, camera);
 
     }
 
+
     </script>
 </body>
 </html>
+
+    
