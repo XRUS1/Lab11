@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>three.js xr - dragging with custom depth shader</title>
+    <title>three.js xr - dragging Lenador with custom depth shader</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <link type="text/css" rel="stylesheet" href="main.css">
@@ -9,7 +9,7 @@
 <body>
 
     <div id="info">
-        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> xr - dragging
+        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> xr - dragging Lenador
     </div>
 
     <script type="importmap">
@@ -27,6 +27,7 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { XRButton } from 'three/addons/webxr/XRButton.js';
         import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
         let container;
         let camera, scene, renderer;
@@ -40,6 +41,8 @@
         const tempMatrix = new THREE.Matrix4();
 
         let controls, group;
+        let mixer;
+        let lenadorWrapper;
 
         init();
         animate();
@@ -81,148 +84,194 @@
             group = new THREE.Group();
             scene.add(group);
 
-            // ========== UN SOLO CUBO CON SHADER DE PROFUNDIDAD ==========
-            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-            const material = new THREE.ShaderMaterial({
+            // ========== CUBO TRANSPARENTE (WRAPPER) ==========
+            const wrapperGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+            const wrapperMaterial = new THREE.MeshBasicMaterial({ visible: false });
+            lenadorWrapper = new THREE.Mesh(wrapperGeometry, wrapperMaterial);
+            lenadorWrapper.position.set(0, 1.0, 0);
+            group.add(lenadorWrapper);
 
-                vertexShader: /* glsl */`
-                    varying vec3 vNormal;
-                    varying vec2 vUv;
-                    void main() {
-                        vNormal = normalize(normalMatrix * normal);
-                        vUv = uv;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `,
+            // ========== CARGAR LEÑADOR ==========
+            const loader = new FBXLoader();
+            loader.load('./models/fbx/Lenador.fbx', function (object) {
 
-                fragmentShader: /* glsl */`
-                    uniform vec3 diffuseColor;
-                    uniform float roughness;
-                    uniform float metalness;
-                    uniform float emissive;
-                    varying vec3 vNormal;
-                    varying vec2 vUv;
-                    uniform sampler2DArray depthColor;
-                    uniform float depthWidth;
-                    uniform float depthHeight;
-                    #define saturate(a) clamp(a, 0.0, 1.0)
-                    float Depth_GetCameraDepthInMeters(const sampler2DArray depthTexture,
-                        const vec2 depthUv, int arrayIndex) {
-                        return texture(depthColor, vec3(depthUv.x, depthUv.y, arrayIndex)).r;
-                    }
-                    float Depth_GetOcclusion(const sampler2DArray depthTexture, const vec2 depthUv, float assetDepthM, int arrayIndex) {
-                        float depthMm = Depth_GetCameraDepthInMeters(depthTexture, depthUv, arrayIndex);
-                        const float kDepthTolerancePerM = 0.001;
-                        return clamp(1.0 -
-                            0.5 * (depthMm - assetDepthM) /
-                                (kDepthTolerancePerM * assetDepthM) +
-                            0.5, 0.0, 1.0);
-                    }
-                    float Depth_GetBlurredOcclusionAroundUV(const sampler2DArray depthTexture, const vec2 uv, float assetDepthM, int arrayIndex) {
-                        const float kKernelTotalWeights = 269.0;
-                        float sum = 0.0;
-                        const float kOcclusionBlurAmount = 0.0005;
-                        vec2 blurriness =
-                        vec2(kOcclusionBlurAmount, kOcclusionBlurAmount);
-                        float current = 0.0;
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
-                        sum += current * 4.0;
-                        current = 0.0;
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-2.0, -0.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+2.0, +0.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+0.0, +2.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-0.0, -2.0) * blurriness, assetDepthM, arrayIndex);
-                        sum += current * 7.0;
-                        current = 0.0;
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
-                        sum += current * 16.0;
-                        current = 0.0;
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+0.0, +1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-0.0, -1.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(-1.0, -0.0) * blurriness, assetDepthM, arrayIndex);
-                        current += Depth_GetOcclusion(
-                        depthTexture, uv + vec2(+1.0, +0.0) * blurriness, assetDepthM, arrayIndex);
-                        sum += current * 26.0;
-                        sum += Depth_GetOcclusion(depthTexture, uv, assetDepthM, arrayIndex) * 41.0;
-                        return sum / kKernelTotalWeights;
-                    }
-                    void main() {
-                        vec3 normal = normalize(vNormal);
-                        vec3 diffuse = diffuseColor;
-                        float specularIntensity = pow(max(dot(normal, normalize(vec3(0, 0, 1))), 0.0), 64.0);
-                        vec3 specular = vec3(specularIntensity) * mix(vec3(0.04), diffuse, metalness);
-                        gl_FragColor = vec4(diffuse * (1.0 - specular) + specular, 1.0) * (1.0 + emissive);
+                const lenador = object;
 
-                        if (depthWidth > 0.0) {
-                            int arrayIndex = 0;
-                            vec2 depthUv;
-                            if (gl_FragCoord.x>=depthWidth) {
-                                arrayIndex = 1;
-                                depthUv = vec2((gl_FragCoord.x-depthWidth)/depthWidth, gl_FragCoord.y/depthHeight);
-                            } else {
-                                depthUv = vec2(gl_FragCoord.x/depthWidth, gl_FragCoord.y/depthHeight);
-                            }
-                            float assetDepthM = gl_FragCoord.z;
+                // Escala
+                lenador.scale.set(0.004, 0.004, 0.004);
 
-                            float occlusion = Depth_GetBlurredOcclusionAroundUV(depthColor, depthUv, assetDepthM, arrayIndex);
-                            float depthMm = Depth_GetCameraDepthInMeters(depthColor, depthUv, arrayIndex);
-
-                            float absDistance = abs(assetDepthM - depthMm);
-                            float v = 0.0025;
-                            absDistance = saturate(v - absDistance) / v;
-
-                            gl_FragColor.rgb += vec3(absDistance * 2.0, absDistance * 2.0, absDistance * 12.0);
-                            gl_FragColor = mix(gl_FragColor, vec4(0.0, 0.0, 0.0, 0.0), occlusion * 0.7);
-                        }
-                    }
-                `,
-
-                uniforms: {
-                    diffuseColor: { value: new THREE.Color(Math.random() * 0xffffff) },
-                    roughness: { value: 0.7 },
-                    metalness: { value: 0.0 },
-                    emissive: { value: 0.0 },
-                    depthWidth: { value: 0.0 },
-                    depthHeight: { value: 0.0 },
-                    depthColor: { value: new THREE.Texture() }
+                // Animación
+                mixer = new THREE.AnimationMixer(lenador);
+                if (lenador.animations && lenador.animations.length > 4) {
+                    const action = mixer.clipAction(lenador.animations[4]);
+                    action.play();
+                } else if (lenador.animations && lenador.animations.length > 0) {
+                    const action = mixer.clipAction(lenador.animations[0]);
+                    action.play();
                 }
+
+                // Aplicar shader de profundidad con textura opcional
+                lenador.traverse(function (child) {
+                    if (child.isMesh) {
+                        // Guardar textura original si existe
+                        const originalMap = child.material.map || null;
+                        const originalColor = child.material.color ? child.material.color.clone() : new THREE.Color(0.5, 0.3, 0.1);
+
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+
+                        child.material = new THREE.ShaderMaterial({
+                            uniforms: {
+                                diffuseColor: { value: originalColor },
+                                map: { value: originalMap },
+                                hasMap: { value: originalMap ? 1.0 : 0.0 },
+                                roughness: { value: 0.7 },
+                                metalness: { value: 0.0 },
+                                emissive: { value: 0.0 },
+                                depthColor: { value: new THREE.Texture() },
+                                depthWidth: { value: 0.0 },
+                                depthHeight: { value: 0.0 }
+                            },
+                            vertexShader: /* glsl */`
+                                varying vec3 vNormal;
+                                varying vec2 vUv;
+                                void main() {
+                                    vNormal = normalize(normalMatrix * normal);
+                                    vUv = uv;
+                                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                                }
+                            `,
+
+                            fragmentShader: /* glsl */`
+                                uniform vec3 diffuseColor;
+                                uniform sampler2D map;
+                                uniform float hasMap;
+                                uniform float roughness;
+                                uniform float metalness;
+                                uniform float emissive;
+                                varying vec3 vNormal;
+                                varying vec2 vUv;
+                                uniform sampler2DArray depthColor;
+                                uniform float depthWidth;
+                                uniform float depthHeight;
+                                #define saturate(a) clamp(a, 0.0, 1.0)
+                                float Depth_GetCameraDepthInMeters(const sampler2DArray depthTexture,
+                                    const vec2 depthUv, int arrayIndex) {
+                                    return texture(depthColor, vec3(depthUv.x, depthUv.y, arrayIndex)).r;
+                                }
+                                float Depth_GetOcclusion(const sampler2DArray depthTexture, const vec2 depthUv, float assetDepthM, int arrayIndex) {
+                                    float depthMm = Depth_GetCameraDepthInMeters(depthTexture, depthUv, arrayIndex);
+                                    const float kDepthTolerancePerM = 0.001;
+                                    return clamp(1.0 -
+                                        0.5 * (depthMm - assetDepthM) /
+                                            (kDepthTolerancePerM * assetDepthM) +
+                                        0.5, 0.0, 1.0);
+                                }
+                                float Depth_GetBlurredOcclusionAroundUV(const sampler2DArray depthTexture, const vec2 uv, float assetDepthM, int arrayIndex) {
+                                    const float kKernelTotalWeights = 269.0;
+                                    float sum = 0.0;
+                                    const float kOcclusionBlurAmount = 0.0005;
+                                    vec2 blurriness =
+                                    vec2(kOcclusionBlurAmount, kOcclusionBlurAmount);
+                                    float current = 0.0;
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+2.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                                    sum += current * 4.0;
+                                    current = 0.0;
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-2.0, -0.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+2.0, +0.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+0.0, +2.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-0.0, -2.0) * blurriness, assetDepthM, arrayIndex);
+                                    sum += current * 7.0;
+                                    current = 0.0;
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                                    sum += current * 16.0;
+                                    current = 0.0;
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+0.0, +1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-0.0, -1.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(-1.0, -0.0) * blurriness, assetDepthM, arrayIndex);
+                                    current += Depth_GetOcclusion(
+                                    depthTexture, uv + vec2(+1.0, +0.0) * blurriness, assetDepthM, arrayIndex);
+                                    sum += current * 26.0;
+                                    sum += Depth_GetOcclusion(depthTexture, uv, assetDepthM, arrayIndex) * 41.0;
+                                    return sum / kKernelTotalWeights;
+                                }
+                                void main() {
+                                    vec3 normal = normalize(vNormal);
+                                    
+                                    // COLOR: textura si existe, si no color sólido
+                                    vec3 diffuse;
+                                    if (hasMap > 0.5) {
+                                        diffuse = texture2D(map, vUv).rgb;
+                                    } else {
+                                        diffuse = diffuseColor;
+                                    }
+                                    
+                                    float specularIntensity = pow(max(dot(normal, normalize(vec3(0, 0, 1))), 0.0), 64.0);
+                                    vec3 specular = vec3(specularIntensity) * mix(vec3(0.04), diffuse, metalness);
+                                    gl_FragColor = vec4(diffuse * (1.0 - specular) + specular, 1.0) * (1.0 + emissive);
+
+                                    if (depthWidth > 0.0) {
+                                        int arrayIndex = 0;
+                                        vec2 depthUv;
+                                        if (gl_FragCoord.x>=depthWidth) {
+                                            arrayIndex = 1;
+                                            depthUv = vec2((gl_FragCoord.x-depthWidth)/depthWidth, gl_FragCoord.y/depthHeight);
+                                        } else {
+                                            depthUv = vec2(gl_FragCoord.x/depthWidth, gl_FragCoord.y/depthHeight);
+                                        }
+                                        float assetDepthM = gl_FragCoord.z;
+
+                                        float occlusion = Depth_GetBlurredOcclusionAroundUV(depthColor, depthUv, assetDepthM, arrayIndex);
+                                        float depthMm = Depth_GetCameraDepthInMeters(depthColor, depthUv, arrayIndex);
+
+                                        float absDistance = abs(assetDepthM - depthMm);
+                                        float v = 0.0025;
+                                        absDistance = saturate(v - absDistance) / v;
+
+                                        gl_FragColor.rgb += vec3(absDistance * 2.0, absDistance * 2.0, absDistance * 12.0);
+                                        gl_FragColor = mix(gl_FragColor, vec4(0.0, 0.0, 0.0, 0.0), occlusion * 0.7);
+                                    }
+                                }
+                            `
+                        });
+                    }
+                });
+
+                // El leñador es hijo del wrapper
+                lenadorWrapper.add(lenador);
+
             });
 
-            const object = new THREE.Mesh(geometry, material);
-            object.position.set(0, 1.0, 0);
-            group.add(object);
-
-            //
-
+            // ========== RENDERER ==========
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -235,8 +284,7 @@
                 'depthSensing': { 'usagePreference': ['gpu-optimized'], 'dataFormatPreference': [] }
             }));
 
-            // controllers
-
+            // ========== CONTROLADORES ==========
             controller1 = renderer.xr.getController(0);
             controller1.addEventListener('selectstart', onSelectStart);
             controller1.addEventListener('selectend', onSelectEnd);
@@ -257,10 +305,8 @@
             controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
             scene.add(controllerGrip2);
 
-            //
-
+            // Líneas de rayo
             const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
-
             const line = new THREE.Line(lineGeometry);
             line.name = 'line';
             line.scale.z = 5;
@@ -270,151 +316,105 @@
 
             raycaster = new THREE.Raycaster();
 
-            //
-
             window.addEventListener('resize', onWindowResize);
 
         }
 
         function onWindowResize() {
-
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
-
             renderer.setSize(window.innerWidth, window.innerHeight);
-
         }
 
+        // ========== AGARRAR ==========
         function onSelectStart(event) {
-
             const controller = event.target;
-
             const intersections = getIntersections(controller);
 
             if (intersections.length > 0) {
-
                 const intersection = intersections[0];
-
                 const object = intersection.object;
-                object.material.uniforms.emissive.value = 1;
                 controller.attach(object);
-
                 controller.userData.selected = object;
-
             }
 
             controller.userData.targetRayMode = event.data.targetRayMode;
-
         }
 
+        // ========== SOLTAR ==========
         function onSelectEnd(event) {
-
             const controller = event.target;
 
             if (controller.userData.selected !== undefined) {
-
                 const object = controller.userData.selected;
-                object.material.uniforms.emissive.value = 0;
                 group.attach(object);
-
                 controller.userData.selected = undefined;
-
             }
-
         }
 
+        // ========== INTERSECCIONES ==========
         function getIntersections(controller) {
-
             controller.updateMatrixWorld();
-
             tempMatrix.identity().extractRotation(controller.matrixWorld);
-
             raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
             raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
             return raycaster.intersectObjects(group.children, false);
-
         }
 
         function intersectObjects(controller) {
-
-            // Do not highlight in mobile-ar
-
             if (controller.userData.targetRayMode === 'screen') return;
-
-            // Do not highlight when already selected
-
             if (controller.userData.selected !== undefined) return;
 
             const line = controller.getObjectByName('line');
             const intersections = getIntersections(controller);
 
             if (intersections.length > 0) {
-
                 const intersection = intersections[0];
-
                 const object = intersection.object;
-                object.material.uniforms.emissive.value = 1;
                 intersected.push(object);
-
                 line.scale.z = intersection.distance;
-
             } else {
-
                 line.scale.z = 5;
-
             }
-
         }
 
         function cleanIntersected() {
-
             while (intersected.length) {
-
                 const object = intersected.pop();
-                object.material.uniforms.emissive.value = 0;
-
             }
-
         }
 
-        //
-
+        // ========== LOOP ==========
         function animate() {
-
             renderer.setAnimationLoop(render);
-
         }
 
         function render() {
 
+            // Actualizar animación del leñador
+            if (mixer) mixer.update(0.016);
+
+            // Depth sensing
             if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
-
-                group.children.forEach(child => {
-
-                    child.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
-                    child.material.uniforms.depthWidth.value = 1680;
-                    child.material.uniforms.depthHeight.value = 1760;
-
-                    isDepthSupplied = true;
-
+                lenadorWrapper.traverse(function (child) {
+                    if (child.isMesh && child.material.uniforms) {
+                        child.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
+                        child.material.uniforms.depthWidth.value = 1680;
+                        child.material.uniforms.depthHeight.value = 1760;
+                    }
                 });
-
+                isDepthSupplied = true;
             } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
-
-                group.children.forEach(child => {
-
-                    child.material.uniforms.depthWidth.value = 0;
-                    child.material.uniforms.depthHeight.value = 0;
-
-                    isDepthSupplied = false;
-
+                lenadorWrapper.traverse(function (child) {
+                    if (child.isMesh && child.material.uniforms) {
+                        child.material.uniforms.depthWidth.value = 0;
+                        child.material.uniforms.depthHeight.value = 0;
+                    }
                 });
-
+                isDepthSupplied = false;
             }
 
             cleanIntersected();
-
             intersectObjects(controller1);
             intersectObjects(controller2);
 
