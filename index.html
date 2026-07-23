@@ -3,7 +3,7 @@
 <head>
     <title>three.js xr - Hit Test + Dragging with Depth</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <link type="text/css" rel="stylesheet" href="main.css">
     <style>
         body { margin: 0; overflow: hidden; touch-action: none; }
@@ -34,7 +34,6 @@
         import { ARButton } from 'three/addons/webxr/ARButton.js';
         import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
-        // ========== VARIABLES GLOBALES ==========
         let camera, scene, renderer;
         let controller;
         let reticle;
@@ -51,7 +50,6 @@
         init();
         animate();
 
-        // ========== INIT ==========
         function init() {
 
             const container = document.createElement('div');
@@ -60,13 +58,12 @@
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-            // Luces
             scene.add(new THREE.HemisphereLight(0xa5a5a5, 0x898989, 3));
             const light = new THREE.DirectionalLight(0xffffff, 3);
             light.position.set(1, 1, 1).normalize();
             scene.add(light);
 
-            // ========== RETÍCULA PARA HIT TEST ==========
+            // ========== RETÍCULA ==========
             const reticleGeometry = new THREE.RingGeometry(0.05, 0.07, 32);
             const reticleMaterial = new THREE.MeshBasicMaterial({
                 color: 0x00ff00, side: THREE.DoubleSide, transparent: true, opacity: 0.8
@@ -195,13 +192,11 @@
             cube.castShadow = true;
             cube.receiveShadow = true;
 
-            // Wrapper transparente para drag
             const wrapperGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.15);
             const wrapperMaterial = new THREE.MeshBasicMaterial({ visible: false });
             cubeWrapper = new THREE.Mesh(wrapperGeometry, wrapperMaterial);
             cubeWrapper.position.set(0.3, 1.0, -0.5);
             cubeWrapper.add(cube);
-
             scene.add(cubeWrapper);
 
             // ========== CARGAR LEÑADOR ==========
@@ -212,7 +207,6 @@
                 lenador.scale.set(0.004, 0.004, 0.004);
                 lenador.visible = false;
 
-                // Animación
                 lenadorMixer = new THREE.AnimationMixer(lenador);
                 if (lenador.animations && lenador.animations.length > 4) {
                     const action = lenadorMixer.clipAction(lenador.animations[4]);
@@ -222,7 +216,6 @@
                     action.play();
                 }
 
-                // Sombras
                 lenador.traverse(function (child) {
                     if (child.isMesh) {
                         child.castShadow = true;
@@ -252,6 +245,20 @@
             controller.addEventListener('select', onSelect);
             scene.add(controller);
 
+            // ========== EVENTO DE INICIO DE SESIÓN ==========
+            renderer.xr.addEventListener('sessionstart', function () {
+                const session = renderer.xr.getSession();
+                session.requestReferenceSpace('viewer').then(function (viewerSpace) {
+                    session.requestHitTestSource({ space: viewerSpace }).then(function (source) {
+                        hitTestSource = source;
+                    });
+                });
+            });
+
+            renderer.xr.addEventListener('sessionend', function () {
+                hitTestSource = null;
+            });
+
             window.addEventListener('resize', onWindowResize);
         }
 
@@ -261,11 +268,27 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        // ========== EVENTO SELECT (TOQUE) ==========
+        // ========== EVENTO SELECT ==========
         function onSelect() {
 
-            // Si hay retícula visible, colocar leñador (HIT TEST)
-            if (reticle.visible && lenador && !draggedObject) {
+            // Si estamos arrastrando el cubo, soltarlo
+            if (draggedObject) {
+                scene.attach(cubeWrapper);
+                draggedObject = null;
+                document.getElementById('info').textContent = 'Hit Test: toca para colocar leñador | Drag: toca cubo para arrastrar';
+                return;
+            }
+
+            // Verificar si tocó el cubo (DRAG)
+            if (isTouchingCube()) {
+                controller.attach(cubeWrapper);
+                draggedObject = cubeWrapper;
+                document.getElementById('info').textContent = 'Suelta para dejar el cubo';
+                return;
+            }
+
+            // Si hay retícula, colocar leñador (HIT TEST)
+            if (reticle.visible && lenador) {
                 const position = new THREE.Vector3();
                 const quaternion = new THREE.Quaternion();
                 const scale = new THREE.Vector3();
@@ -274,22 +297,6 @@
                 lenador.position.copy(position);
                 lenador.quaternion.copy(quaternion);
                 lenador.visible = true;
-                return;
-            }
-
-            // Si el cubo está siendo arrastrado, soltar
-            if (draggedObject) {
-                scene.attach(cubeWrapper);
-                draggedObject = null;
-                document.getElementById('info').textContent = 'Hit Test: toca para colocar leñador | Drag: toca cubo para arrastrar';
-                return;
-            }
-
-            // Intentar agarrar cubo (DRAG)
-            if (isTouchingCube()) {
-                controller.attach(cubeWrapper);
-                draggedObject = cubeWrapper;
-                document.getElementById('info').textContent = 'Suelta para dejar el cubo';
             }
         }
 
@@ -310,41 +317,27 @@
             renderer.setAnimationLoop(function (time, frame) {
 
                 const delta = clock.getDelta();
-
-                // Actualizar animación del leñador
                 if (lenadorMixer) lenadorMixer.update(delta);
 
                 // ========== HIT TEST ==========
-                if (frame) {
+                if (frame && hitTestSource) {
                     const referenceSpace = renderer.xr.getReferenceSpace();
-                    const session = renderer.xr.getSession();
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-                    if (hitTestSource === null && session !== null) {
-                        session.requestReferenceSpace('viewer').then(function (viewerSpace) {
-                            session.requestHitTestSource({ space: viewerSpace }).then(function (source) {
-                                hitTestSource = source;
-                            });
-                        });
-                    }
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        const hitPose = hit.getPose(referenceSpace);
 
-                    if (hitTestSource) {
-                        const hitTestResults = frame.getHitTestResults(hitTestSource);
-
-                        if (hitTestResults.length > 0) {
-                            const hit = hitTestResults[0];
-                            const hitPose = hit.getPose(referenceSpace);
-
-                            if (hitPose) {
-                                reticle.visible = true;
-                                reticle.matrix.fromArray(hitPose.transform.matrix);
-                            }
-                        } else {
-                            reticle.visible = false;
+                        if (hitPose) {
+                            reticle.visible = true;
+                            reticle.matrix.fromArray(hitPose.transform.matrix);
                         }
+                    } else {
+                        reticle.visible = false;
                     }
                 }
 
-                // ========== DEPTH SENSING PARA CUBO ==========
+                // ========== DEPTH SENSING ==========
                 if (renderer.xr.hasDepthSensing && renderer.xr.hasDepthSensing() && !isDepthSupplied) {
                     cube.material.uniforms.depthColor.value = renderer.xr.getDepthTexture();
                     cube.material.uniforms.depthWidth.value = 1680;
