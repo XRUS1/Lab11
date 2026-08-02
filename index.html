@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <title>Lab 11 - Debug WebXR AR</title>
+    <title>Lab 11 - WebXR AR Forzado</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
@@ -29,7 +29,7 @@
             right: 10px;
             max-height: 120px;
             overflow-y: auto;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.8);
             color: #0f0;
             font-family: monospace;
             font-size: 11px;
@@ -38,14 +38,13 @@
             border-radius: 4px;
         }
     </style>
-    <!-- ERUDA: consola de depuraciÃ³n en mÃ³vil -->
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
     <script>eruda.init();</script>
 </head>
 <body>
 
     <div id="info">
-        <a href="https://threejs.org" target="_blank">three.js</a> WebXR AR - Debug
+        <a href="https://threejs.org" target="_blank">three.js</a> WebXR AR - Modo forzado
     </div>
     <div id="debug-log">[LOG] Iniciando...<br></div>
 
@@ -72,8 +71,6 @@
             logEl.scrollTop = logEl.scrollHeight;
         }
 
-        log('[1] Script cargado');
-
         let container, camera, scene, renderer;
         let controller1, controller2;
         let controllerGrip1, controllerGrip2;
@@ -84,18 +81,29 @@
 
         init();
 
-        function init() {
+        async function init() {
             try {
-                log('[2] Iniciando init()');
+                log('[1] Iniciando...');
+
+                // Verificar soporte WebXR ANTES de crear nada
+                if (!navigator.xr) {
+                    log('[ERROR] navigator.xr no existe. Usa Chrome.');
+                    return;
+                }
+
+                const arSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                log('[2] AR soportado: ' + arSupported);
+
+                if (!arSupported) {
+                    log('[ERROR] Tu celular no soporta AR ahora mismo.');
+                    return;
+                }
 
                 container = document.createElement('div');
                 document.body.appendChild(container);
 
                 scene = new THREE.Scene();
-                // IMPORTANTE: background = null para AR passthrough
-                // Si pones un color, tapa la cÃ¡mara real
-                scene.background = null;
-                log('[3] Scene creada (background = null)');
+                scene.background = null; // Passthrough
 
                 camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 10);
                 camera.position.set(0, 1.6, 3);
@@ -104,7 +112,6 @@
                 controls.target.set(0, 1.6, 0);
                 controls.update();
 
-                // Suelo invisible para sombras
                 const floorGeometry = new THREE.PlaneGeometry(6, 6);
                 const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.25, blending: THREE.CustomBlending, transparent: false });
                 const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -127,9 +134,7 @@
                 group = new THREE.Group();
                 scene.add(group);
 
-                log('[4] Luces y suelo listos');
-
-                // â”€â”€â”€ Material Shader con OclusiÃ³n â”€â”€â”€
+                // Material Shader
                 const depthMaterial = new THREE.ShaderMaterial({
                     transparent: true,
                     side: THREE.DoubleSide,
@@ -229,32 +234,25 @@
                 object.castShadow = true;
                 object.receiveShadow = true;
                 group.add(object);
-                log('[5] Cubo creado');
 
-                // â”€â”€â”€ Renderer â”€â”€â”€
-                // NOTA: NO usamos alpha:true porque en WebXR AR puede causar fallos
                 renderer = new THREE.WebGLRenderer({ antialias: true });
                 renderer.setPixelRatio(window.devicePixelRatio);
                 renderer.setSize(window.innerWidth, window.innerHeight);
                 renderer.shadowMap.enabled = true;
                 renderer.xr.enabled = true;
                 container.appendChild(renderer.domElement);
-                log('[6] Renderer creado');
 
-                // â”€â”€â”€ BotÃ³n WebXR â”€â”€â”€
-                // FIX: depthSensing sin dataFormatPreference forzado
-                // Algunos dispositivos no soportan 'luminance-alpha'
-                const xrButton = XRButton.createButton(renderer, {
-                    'optionalFeatures': ['depth-sensing'],
-                    'depthSensing': {
-                        'usagePreference': ['gpu-optimized'],
-                        'dataFormatPreference': []  // Dejamos que el navegador elija
-                    }
-                });
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                //  FIX: Forzar modo AR explÃ­citamente
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                const sessionInit = {
+                    mode: 'immersive-ar'  // â† Esto fuerza AR, no VR
+                };
+
+                const xrButton = XRButton.createButton(renderer, sessionInit);
                 document.body.appendChild(xrButton);
-                log('[7] BotÃ³n XR creado');
+                log('[3] BotÃ³n AR creado (modo forzado: immersive-ar)');
 
-                // â”€â”€â”€ Controladores â”€â”€â”€
                 controller1 = renderer.xr.getController(0);
                 controller1.addEventListener('selectstart', onSelectStart);
                 controller1.addEventListener('selectend', onSelectEnd);
@@ -289,10 +287,10 @@
                 window.addEventListener('resize', onWindowResize);
 
                 renderer.setAnimationLoop(render);
-                log('[8] Todo listo. Toca el botÃ³n AR.');
+                log('[4] Todo listo. Toca el botÃ³n AR.');
 
             } catch (err) {
-                log('[ERROR] ' + err.message);
+                log('[ERROR] ' + err.name + ': ' + err.message);
                 console.error(err);
             }
         }
@@ -378,6 +376,7 @@
                     }
                 });
                 isDepthSupplied = true;
+                log('[DEPTH] OclusiÃ³n activada');
             } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
                 group.children.forEach(child => {
                     child.material.uniforms.depthWidth.value = 0;
