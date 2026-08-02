@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
-    <title>three.js xr - dragging with custom depth shader</title>
+    <title>Lab 11 - WebXR AR con OclusiÃ³n por Profundidad</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
@@ -18,6 +18,7 @@
             width: 100%;
             text-align: center;
             z-index: 100;
+            pointer-events: none;
         }
         a {
             color: #4af;
@@ -28,7 +29,7 @@
 <body>
 
     <div id="info">
-        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> xr - dragging
+        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> WebXR AR - OclusiÃ³n por profundidad
     </div>
 
     <script type="importmap">
@@ -47,22 +48,23 @@
         import { XRButton } from 'three/addons/webxr/XRButton.js';
         import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
+        // â”€â”€â”€ Variables globales â”€â”€â”€
         let container;
         let camera, scene, renderer;
         let controller1, controller2;
         let controllerGrip1, controllerGrip2;
-        let isDepthSupplied = false;
-
         let raycaster;
+        let controls, group;
+        let isDepthSupplied = false;
 
         const intersected = [];
         const tempMatrix = new THREE.Matrix4();
 
-        let controls, group;
-
         init();
-        animate();
 
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        //  INICIALIZACIÃ“N
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         function init() {
 
             container = document.createElement('div');
@@ -78,6 +80,7 @@
             controls.target.set(0, 1.6, 0);
             controls.update();
 
+            // Suelo que recibe sombras
             const floorGeometry = new THREE.PlaneGeometry(6, 6);
             const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.25, blending: THREE.CustomBlending, transparent: false });
             const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -85,6 +88,7 @@
             floor.receiveShadow = true;
             scene.add(floor);
 
+            // Luces
             scene.add(new THREE.HemisphereLight(0xbcbcbc, 0xa5a5a5, 3));
 
             const light = new THREE.DirectionalLight(0xffffff, 3);
@@ -97,38 +101,59 @@
             light.shadow.mapSize.set(4096, 4096);
             scene.add(light);
 
+            // Grupo de objetos interactuables
             group = new THREE.Group();
             scene.add(group);
 
-            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-            const material = new THREE.ShaderMaterial({
+            // â”€â”€â”€ Material Shader con OCLUSIÃ“N REAL por profundidad â”€â”€â”€
+            const depthMaterial = new THREE.ShaderMaterial({
+                transparent: true,
+                side: THREE.DoubleSide,
 
-                vertexShader: `
+                uniforms: {
+                    diffuseColor: { value: new THREE.Color(0x00aaff) },
+                    emissive:     { value: 0.0 },
+                    depthColor:   { value: null },
+                    depthWidth:   { value: 1.0 },
+                    depthHeight:  { value: 1.0 }
+                },
+
+                vertexShader: /* glsl */ `
                     varying vec3 vNormal;
                     varying vec2 vUv;
+                    varying vec3 vViewPosition;
+
                     void main() {
                         vNormal = normalize(normalMatrix * normal);
                         vUv = uv;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        vViewPosition = -mvPosition.xyz;
+
+                        gl_Position = projectionMatrix * mvPosition;
                     }
                 `,
 
-                fragmentShader: `
+                fragmentShader: /* glsl */ `
                     uniform vec3 diffuseColor;
-                    uniform float roughness;
-                    uniform float metalness;
                     uniform float emissive;
-                    varying vec3 vNormal;
-                    varying vec2 vUv;
                     uniform sampler2DArray depthColor;
                     uniform float depthWidth;
                     uniform float depthHeight;
+
+                    varying vec3 vNormal;
+                    varying vec2 vUv;
+                    varying vec3 vViewPosition;
+
                     #define saturate(a) clamp(a, 0.0, 1.0)
+
                     float Depth_GetCameraDepthInMeters(const sampler2DArray depthTexture,
                         const vec2 depthUv, int arrayIndex) {
                         return texture(depthColor, vec3(depthUv.x, depthUv.y, arrayIndex)).r;
                     }
-                    float Depth_GetOcclusion(const sampler2DArray depthTexture, const vec2 depthUv, float assetDepthM, int arrayIndex) {
+
+                    float Depth_GetOcclusion(const sampler2DArray depthTexture,
+                        const vec2 depthUv, float assetDepthM, int arrayIndex) {
                         float depthMm = Depth_GetCameraDepthInMeters(depthTexture, depthUv, arrayIndex);
                         const float kDepthTolerancePerM = 0.001;
                         return clamp(1.0 -
@@ -136,12 +161,15 @@
                                 (kDepthTolerancePerM * assetDepthM) +
                             0.5, 0.0, 1.0);
                     }
-                    float Depth_GetBlurredOcclusionAroundUV(const sampler2DArray depthTexture, const vec2 uv, float assetDepthM, int arrayIndex) {
+
+                    float Depth_GetBlurredOcclusionAroundUV(const sampler2DArray depthTexture,
+                        const vec2 uv, float assetDepthM, int arrayIndex) {
                         const float kKernelTotalWeights = 269.0;
                         float sum = 0.0;
                         const float kOcclusionBlurAmount = 0.0005;
                         vec2 blurriness = vec2(kOcclusionBlurAmount, kOcclusionBlurAmount);
                         float current = 0.0;
+
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+1.0, -2.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-1.0, +2.0) * blurriness, assetDepthM, arrayIndex);
@@ -151,53 +179,64 @@
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+2.0, -1.0) * blurriness, assetDepthM, arrayIndex);
                         sum += current * 4.0;
+
                         current = 0.0;
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-2.0, -0.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+2.0, +0.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+0.0, +2.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-0.0, -2.0) * blurriness, assetDepthM, arrayIndex);
                         sum += current * 7.0;
+
                         current = 0.0;
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+1.0, -1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+1.0, +1.0) * blurriness, assetDepthM, arrayIndex);
                         sum += current * 16.0;
+
                         current = 0.0;
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+0.0, +1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-0.0, -1.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(+1.0, +0.0) * blurriness, assetDepthM, arrayIndex);
                         current += Depth_GetOcclusion(depthTexture, uv + vec2(-1.0, -0.0) * blurriness, assetDepthM, arrayIndex);
                         sum += current * 26.0;
+
                         current = Depth_GetOcclusion(depthTexture, uv, assetDepthM, arrayIndex);
                         sum += current * 33.0;
+
                         return sum / kKernelTotalWeights;
                     }
+
                     void main() {
                         vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
                         float lightIntensity = max(dot(vNormal, lightDir), 0.3);
                         vec3 finalColor = diffuseColor * lightIntensity;
                         finalColor += vec3(emissive * 0.2);
-                        gl_FragColor = vec4(finalColor, 1.0);
+
+                        float assetDepthM = length(vViewPosition);
+                        vec2 screenUV = gl_FragCoord.xy / vec2(depthWidth, depthHeight);
+
+                        float occlusion = 1.0;
+                        if (depthWidth > 1.0 && depthHeight > 1.0) {
+                            occlusion = Depth_GetBlurredOcclusionAroundUV(depthColor, screenUV, assetDepthM, 0);
+                        }
+
+                        gl_FragColor = vec4(finalColor, occlusion);
                     }
                 `
             });
 
-            material.uniforms = {
-                diffuseColor: { value: new THREE.Color(0x00aaff) },
-                emissive: { value: 0.0 },
-                roughness: { value: 1.0 },
-                metalness: { value: 0.0 },
-                depthColor: { value: null },
-                depthWidth: { value: 1 },
-                depthHeight: { value: 1 }
-            };
+            // â”€â”€â”€ Crear el cubo â”€â”€â”€
+            const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            const object = new THREE.Mesh(geometry, depthMaterial);
+            object.position.set(0, 1.0, -1.5);
+            object.castShadow = true;
+            object.receiveShadow = true;
+            group.add(object);
 
-            // Por esto (reemplaza el 0 final por -1.5 o -2.0):
-	    const object = new THREE.Mesh(geometry, material);
-	    object.position.set(0, 1.0, -1.5); // Ahora aparecerá a 1.5 metros enfrente de ti
-	    group.add(object);
-	    
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            //  RENDERER
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -205,205 +244,172 @@
             renderer.xr.enabled = true;
             container.appendChild(renderer.domElement);
 
+            // BotÃ³n de entrada a WebXR (AR/VR)
             document.body.appendChild(XRButton.createButton(renderer, {
                 'optionalFeatures': ['depth-sensing'],
-            'depthSensing': { 'usagePreference': ['gpu-optimized'], 'dataFormatPreference': ['luminance-alpha'] }
-        }));
+                'depthSensing': {
+                    'usagePreference': ['gpu-optimized'],
+                    'dataFormatPreference': ['luminance-alpha']
+                }
+            }));
 
-        controller1 = renderer.xr.getController(0);
-        controller1.addEventListener('selectstart', onSelectStart);
-        controller1.addEventListener('selectend', onSelectEnd);
-        scene.add(controller1);
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            //  CONTROLADORES VR
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            controller1 = renderer.xr.getController(0);
+            controller1.addEventListener('selectstart', onSelectStart);
+            controller1.addEventListener('selectend', onSelectEnd);
+            scene.add(controller1);
 
-        controller2 = renderer.xr.getController(1);
-        controller2.addEventListener('selectstart', onSelectStart);
-        controller2.addEventListener('selectend', onSelectEnd);
-        scene.add(controller2);
+            controller2 = renderer.xr.getController(1);
+            controller2.addEventListener('selectstart', onSelectStart);
+            controller2.addEventListener('selectend', onSelectEnd);
+            scene.add(controller2);
 
-        const controllerModelFactory = new XRControllerModelFactory();
+            const controllerModelFactory = new XRControllerModelFactory();
 
-        controllerGrip1 = renderer.xr.getControllerGrip(0);
-        controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
-        scene.add(controllerGrip1);
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+            scene.add(controllerGrip1);
 
-        controllerGrip2 = renderer.xr.getControllerGrip(1);
-        controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
-        scene.add(controllerGrip2);
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+            scene.add(controllerGrip2);
 
-        const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
-
-        const line = new THREE.Line(lineGeometry);
-        line.name = 'line';
-        line.scale.z = 5;
-
-        controller1.add(line.clone());
-        controller2.add(line.clone());
-
-        raycaster = new THREE.Raycaster();
-
-        window.addEventListener('resize', onWindowResize);
-
-    }
-
-    function onWindowResize() {
-
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-
-        renderer.setSize(window.innerWidth, window.innerHeight);
-
-    }
-
-    function onSelectStart(event) {
-
-        const controller = event.target;
-
-        const intersections = getIntersections(controller);
-
-        if (intersections.length > 0) {
-
-            const intersection = intersections[0];
-
-            const object = intersection.object;
-            object.material.uniforms.emissive.value = 1.0;
-            controller.attach(object);
-
-            controller.userData.selected = object;
-
-        }
-
-        controller.userData.targetRayMode = event.data.targetRayMode;
-
-    }
-
-    function onSelectEnd(event) {
-
-        const controller = event.target;
-
-        if (controller.userData.selected !== undefined) {
-
-            const object = controller.userData.selected;
-            object.material.uniforms.emissive.value = 0.0;
-            group.attach(object);
-            
-            // --- LÍNEA AÑADIDA: Asegura que el cubo se alinee perfectamente al soltarlo ---
-            object.rotation.set(0, 0, 0); 
-
-            controller.userData.selected = undefined;
-
-        }
-
-    }
-    
-    function getIntersections(controller) {
-
-        controller.updateMatrixWorld();
-
-        tempMatrix.identity().extractRotation(controller.matrixWorld);
-
-        raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-        return raycaster.intersectObjects(group.children, false);
-
-    }
-
-    function intersectObjects(controller) {
-
-        if (controller.userData.targetRayMode === 'screen') return;
-
-        if (controller.userData.selected !== undefined) return;
-
-        const line = controller.getObjectByName('line');
-        const intersections = getIntersections(controller);
-
-        if (intersections.length > 0) {
-
-            const intersection = intersections[0];
-
-            const object = intersection.object;
-            object.material.uniforms.emissive.value = 1.0;
-            intersected.push(object);
-
-            line.scale.z = intersection.distance;
-
-        } else {
-
+            // Rayos lÃ¡ser de los controladores
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -1)
+            ]);
+            const line = new THREE.Line(lineGeometry);
+            line.name = 'line';
             line.scale.z = 5;
 
+            controller1.add(line.clone());
+            controller2.add(line.clone());
+
+            raycaster = new THREE.Raycaster();
+
+            window.addEventListener('resize', onWindowResize);
+
+            // Iniciar loop
+            renderer.setAnimationLoop(render);
         }
 
-    }
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        //  EVENTOS
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
 
-    function cleanIntersected() {
+        function onSelectStart(event) {
+            const controller = event.target;
+            const intersections = getIntersections(controller);
 
-        while (intersected.length) {
-
-            const object = intersected.pop();
-            if (controller1.userData.selected !== object && controller2.userData.selected !== object) {
-                object.material.uniforms.emissive.value = 0.0;
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                const object = intersection.object;
+                object.material.uniforms.emissive.value = 1.0;
+                controller.attach(object);
+                controller.userData.selected = object;
             }
-
+            controller.userData.targetRayMode = event.data.targetRayMode;
         }
 
-    }
+        function onSelectEnd(event) {
+            const controller = event.target;
 
-    function animate() {
+            if (controller.userData.selected !== undefined) {
+                const object = controller.userData.selected;
+                object.material.uniforms.emissive.value = 0.0;
+                group.attach(object);
+                object.rotation.set(0, 0, 0);
+                controller.userData.selected = undefined;
+            }
+        }
 
-        renderer.setAnimationLoop(render);
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        //  RAYCASTER - Compatible con controladores VR y tÃ¡ctil AR
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        function getIntersections(controller) {
+            if (raycaster.setFromXRController) {
+                raycaster.setFromXRController(controller);
+                return raycaster.intersectObjects(group.children, false);
+            }
+            controller.updateMatrixWorld();
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            return raycaster.intersectObjects(group.children, false);
+        }
 
-    }
+        function intersectObjects(controller) {
+            if (controller.userData.targetRayMode === 'screen') return;
+            if (controller.userData.selected !== undefined) return;
 
-    function render() {
+            const line = controller.getObjectByName('line');
+            const intersections = getIntersections(controller);
 
-        // --- LINEA AÑADIDA: Bloquea la rotación del grupo para que la base mire siempre abajo ---
-        group.rotation.set(0, 0, 0); 
+            if (intersections.length > 0) {
+                const intersection = intersections[0];
+                const object = intersection.object;
+                object.material.uniforms.emissive.value = 1.0;
+                intersected.push(object);
+                line.scale.z = intersection.distance;
+            } else {
+                line.scale.z = 5;
+            }
+        }
 
-        if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
-
-            group.children.forEach(child => {
-
-                const depthTexture = renderer.xr.getDepthTexture();
-                child.material.uniforms.depthColor.value = depthTexture;
-
-                if (depthTexture && depthTexture.source && depthTexture.source.data) {
-                    child.material.uniforms.depthWidth.value = depthTexture.source.data.width;
-                    child.material.uniforms.depthHeight.value = depthTexture.source.data.height;
-                } else {
-                    child.material.uniforms.depthWidth.value = 1680;
-                    child.material.uniforms.depthHeight.value = 1760;
+        function cleanIntersected() {
+            while (intersected.length) {
+                const object = intersected.pop();
+                if (controller1.userData.selected !== object && controller2.userData.selected !== object) {
+                    object.material.uniforms.emissive.value = 0.0;
                 }
+            }
+        }
 
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        //  RENDER LOOP
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        function render() {
+            group.rotation.set(0, 0, 0);
+
+            if (renderer.xr.hasDepthSensing() && !isDepthSupplied) {
+                group.children.forEach(child => {
+                    const depthTexture = renderer.xr.getDepthTexture();
+                    child.material.uniforms.depthColor.value = depthTexture;
+
+                    if (depthTexture && depthTexture.source && depthTexture.source.data) {
+                        child.material.uniforms.depthWidth.value = depthTexture.source.data.width;
+                        child.material.uniforms.depthHeight.value = depthTexture.source.data.height;
+                    } else {
+                        child.material.uniforms.depthWidth.value = 1680;
+                        child.material.uniforms.depthHeight.value = 1760;
+                    }
+                });
                 isDepthSupplied = true;
 
-            });
-
-        } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
-
-            group.children.forEach(child => {
-
-                child.material.uniforms.depthWidth.value = 0;
-                child.material.uniforms.depthHeight.value = 0;
-
+            } else if (!renderer.xr.hasDepthSensing() && isDepthSupplied) {
+                group.children.forEach(child => {
+                    child.material.uniforms.depthWidth.value = 0;
+                    child.material.uniforms.depthHeight.value = 0;
+                });
                 isDepthSupplied = false;
+            }
 
-            });
+            cleanIntersected();
+            intersectObjects(controller1);
+            intersectObjects(controller2);
 
+            controls.update();
+            renderer.render(scene, camera);
         }
-
-        cleanIntersected();
-
-        intersectObjects(controller1);
-        intersectObjects(controller2);
-
-        controls.update();
-        renderer.render(scene, camera);
-
-    }
-
 
     </script>
 </body>
 </html>
-
-    
